@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -20,22 +21,28 @@ import (
 // Transport is an http.RoundTripper that mimics modern browser TLS fingerprints (uTLS)
 // and handles HTTP/2 framing with persistent connection pooling.
 type Transport struct {
-	h2Tr        *http2.Transport
-	h1Tr        *http.Transport
-	limiter     Limiter
-	tlsProfile  utls.ClientHelloID
-	dialTimeout time.Duration
-	proxyFunc   func(*http.Request) (*url.URL, error)
+	h2Tr           *http2.Transport
+	h1Tr           *http.Transport
+	limiter        Limiter
+	tlsProfile     TLSProfile
+	tlsProfileFunc TLSProfileSelector
+	dialTimeout    time.Duration
+	proxyFunc      func(*http.Request) (*url.URL, error)
+	disableH2      bool
 }
 
 // Config specifies the low-level settings to instantiate a Transport.
 type Config struct {
-	TLSProfile         utls.ClientHelloID
+	TLSProfile         TLSProfile
+	TLSProfileFunc     TLSProfileSelector
 	InsecureSkipVerify bool
+	RootCAs            *x509.CertPool
 	DialTimeout        time.Duration
+	DialContext        func(ctx context.Context, network, addr string) (net.Conn, error)
 	PoolConfig         PoolConfig
 	Proxy              func(*http.Request) (*url.URL, error)
 	Limiter            Limiter
+	DisableHTTP2       bool
 }
 
 // NewTransport constructs a new brisk.Transport with the provided configuration.
@@ -43,22 +50,26 @@ func NewTransport(cfg Config) (*Transport, error) {
 	if cfg.DialTimeout <= 0 {
 		cfg.DialTimeout = 10 * time.Second
 	}
-	if cfg.TLSProfile.Client == "" {
-		cfg.TLSProfile = utls.HelloChrome_120
+	if cfg.TLSProfile.id.Client == "" && cfg.TLSProfileFunc == nil {
+		cfg.TLSProfile = DefaultTLSProfile
 	}
 	if cfg.Proxy == nil {
 		cfg.Proxy = http.ProxyFromEnvironment
 	}
 
-	dialer := &net.Dialer{
-		Timeout:   cfg.DialTimeout,
-		KeepAlive: 30 * time.Second,
+	dialContext := cfg.DialContext
+	if dialContext == nil {
+		dialer := &net.Dialer{
+			Timeout:   cfg.DialTimeout,
+			KeepAlive: 30 * time.Second,
+		}
+		dialContext = dialer.DialContext
 	}
 
-	// 1. Configure HTTP/1.1 Transport (for non-TLS http:// URLs or fallback)
+	// 1. Configure HTTP/1.1 Transport
 	h1Tr := &http.Transport{
 		Proxy:                 cfg.Proxy,
-		DialContext:           dialer.DialContext,
+		DialContext:           dialContext,
 		MaxIdleConns:          cfg.PoolConfig.MaxIdleConns,
 		MaxIdleConnsPerHost:   cfg.PoolConfig.MaxIdleConnsPerHost,
 		MaxConnsPerHost:       cfg.PoolConfig.MaxConnsPerHost,
@@ -66,53 +77,68 @@ func NewTransport(cfg Config) (*Transport, error) {
 		TLSHandshakeTimeout:   cfg.DialTimeout,
 		ExpectContinueTimeout: 1 * time.Second,
 		ForceAttemptHTTP2:     false,
-	}
-
-	// 2. Configure HTTP/2 Transport with uTLS for https:// requests
-	h2Tr := &http2.Transport{
-		IdleConnTimeout: cfg.PoolConfig.IdleConnTimeout,
-	}
-
-	h2Tr.DialTLSContext = func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-		host, port, splitErr := net.SplitHostPort(addr)
-		if splitErr != nil {
-			host = addr
-			port = "443"
-			addr = net.JoinHostPort(host, port)
-		}
-
-		rawConn, err := dialDestination(ctx, dialer, cfg.Proxy, addr)
-		if err != nil {
-			return nil, err
-		}
-
-		tlsConfig := &utls.Config{
-			ServerName:         host,
+		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: cfg.InsecureSkipVerify,
-			NextProtos:         []string{"h2", "http/1.1"},
+			RootCAs:            cfg.RootCAs,
+		},
+	}
+
+	// 2. Configure HTTP/2 Transport with uTLS for https:// requests (if not disabled)
+	var h2Tr *http2.Transport
+	if !cfg.DisableHTTP2 {
+		h2Tr = &http2.Transport{
+			IdleConnTimeout: cfg.PoolConfig.IdleConnTimeout,
 		}
 
-		uConn := utls.UClient(rawConn, tlsConfig, cfg.TLSProfile)
-		if hsErr := uConn.HandshakeContext(ctx); hsErr != nil {
-			_ = rawConn.Close()
-			return nil, fmt.Errorf("brisk: utls handshake failed with %s: %w", host, hsErr)
-		}
+		h2Tr.DialTLSContext = func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+			host, port, splitErr := net.SplitHostPort(addr)
+			if splitErr != nil {
+				host = addr
+				port = "443"
+				addr = net.JoinHostPort(host, port)
+			}
 
-		return uConn, nil
+			rawConn, err := dialDestination(ctx, dialContext, cfg.Proxy, addr)
+			if err != nil {
+				return nil, err
+			}
+
+			tlsConfig := &utls.Config{
+				ServerName:         host,
+				InsecureSkipVerify: cfg.InsecureSkipVerify,
+				RootCAs:            cfg.RootCAs,
+				NextProtos:         []string{"h2", "http/1.1"},
+			}
+
+			activeProfile := cfg.TLSProfile
+			if cfg.TLSProfileFunc != nil {
+				activeProfile = cfg.TLSProfileFunc()
+			}
+
+			uConn := utls.UClient(rawConn, tlsConfig, activeProfile.id)
+			if hsErr := uConn.HandshakeContext(ctx); hsErr != nil {
+				_ = rawConn.Close()
+				return nil, fmt.Errorf("brisk: utls handshake failed with %s: %w", host, hsErr)
+			}
+
+			return uConn, nil
+		}
 	}
 
 	return &Transport{
-		h2Tr:        h2Tr,
-		h1Tr:        h1Tr,
-		limiter:     cfg.Limiter,
-		tlsProfile:  cfg.TLSProfile,
-		dialTimeout: cfg.DialTimeout,
-		proxyFunc:   cfg.Proxy,
+		h2Tr:           h2Tr,
+		h1Tr:           h1Tr,
+		limiter:        cfg.Limiter,
+		tlsProfile:     cfg.TLSProfile,
+		tlsProfileFunc: cfg.TLSProfileFunc,
+		dialTimeout:    cfg.DialTimeout,
+		proxyFunc:      cfg.Proxy,
+		disableH2:      cfg.DisableHTTP2,
 	}, nil
 }
 
 // dialDestination handles direct dialing or HTTP CONNECT proxying for HTTPS requests.
-func dialDestination(ctx context.Context, dialer *net.Dialer, proxyFunc func(*http.Request) (*url.URL, error), targetAddr string) (net.Conn, error) {
+func dialDestination(ctx context.Context, dialContext func(context.Context, string, string) (net.Conn, error), proxyFunc func(*http.Request) (*url.URL, error), targetAddr string) (net.Conn, error) {
 	dummyReq := &http.Request{
 		URL: &url.URL{
 			Scheme: "https",
@@ -126,11 +152,9 @@ func dialDestination(ctx context.Context, dialer *net.Dialer, proxyFunc func(*ht
 	}
 
 	if proxyURL == nil {
-		// Direct connection
-		return dialer.DialContext(ctx, "tcp", targetAddr)
+		return dialContext(ctx, "tcp", targetAddr)
 	}
 
-	// Connect via HTTP/HTTPS Proxy with CONNECT method
 	proxyAddr := proxyURL.Host
 	if !strings.Contains(proxyAddr, ":") {
 		if proxyURL.Scheme == "https" {
@@ -140,12 +164,11 @@ func dialDestination(ctx context.Context, dialer *net.Dialer, proxyFunc func(*ht
 		}
 	}
 
-	proxyConn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
+	proxyConn, err := dialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
 		return nil, fmt.Errorf("brisk: connecting to proxy %s failed: %w", proxyAddr, err)
 	}
 
-	// Send HTTP CONNECT tunnel request
 	connectReq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
 	if proxyURL.User != nil {
 		auth := proxyURL.User.String()
@@ -182,12 +205,18 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	if t.limiter != nil {
-		if err := t.limiter.Wait(req.Context()); err != nil {
-			return nil, fmt.Errorf("brisk: rate limit wait failed: %w", err)
+		if rl, ok := t.limiter.(RequestLimiter); ok {
+			if err := rl.WaitRequest(req); err != nil {
+				return nil, fmt.Errorf("brisk: rate limit wait failed: %w", err)
+			}
+		} else {
+			if err := t.limiter.Wait(req.Context()); err != nil {
+				return nil, fmt.Errorf("brisk: rate limit wait failed: %w", err)
+			}
 		}
 	}
 
-	if req.URL.Scheme == "https" {
+	if req.URL.Scheme == "https" && !t.disableH2 && t.h2Tr != nil {
 		return t.h2Tr.RoundTrip(req)
 	}
 	return t.h1Tr.RoundTrip(req)

@@ -73,7 +73,6 @@ import (
 	"time"
 
 	"github.com/chickenzord/go-brisk"
-	utls "github.com/refraction-networking/utls"
 )
 
 func main() {
@@ -83,19 +82,39 @@ func main() {
 		WithMaxIdleConnsPerHost(50).
 		WithIdleConnTimeout(90 * time.Second).
 
-		// TLS Fingerprint Profile
-		WithTLSProfile(utls.HelloChrome_120).
+		// TLS Fingerprint Profile (or WithRandomTLSProfile())
+		WithTLSProfile(brisk.TLSProfileChrome120).
 
 		// Timeouts
 		WithTimeout(30 * time.Second).
 		WithDialTimeout(10 * time.Second).
 
-		// Optional Browser Headers
-		WithBrowserHeaders().
+		// Optional Request Headers (e.g. brisk.DesktopChromeHeaders, brisk.MobileChromeHeaders)
+		WithHeadersFunc(brisk.DesktopChromeHeaders).
 
 		// Zero-Dependency Rate Limiting
-		WithRateLimit(2.0, 5).                             // 2 req/s with burst of 5
+		WithRateLimit(2.0, 5).                             // Global: 2 req/s with burst of 5
+		// WithHostRateLimit(2.0, 5).                      // Or per-host rate limit
 		WithRequestDelay(250*time.Millisecond, 1*time.Second). // Random jitter
+
+		// Resilient Scraping: Automatic Backoff & Retry (Opt-in)
+		WithRetryBuilder(func(r *brisk.RetryBuilder) {
+			r.MaxRetries(3).
+				WhenStatus(429, 502, 503, 504). // Or r.WhenCloudflare() / r.WhenIdempotent()
+				InitialBackoff(500 * time.Millisecond).
+				MaxBackoff(10 * time.Second).
+				Jitter(true).
+				RespectRetryAfter(true)
+		}).
+
+		// Request Deduplication / Singleflight (Opt-in)
+		// WithSingleflight() // Default GET/HEAD deduplication
+		WithSingleflightBuilder(func(s *brisk.SingleflightBuilder) {
+			// Optional custom key generator: s.KeyFunc(customFunc)
+		}).
+
+		// Custom RoundTripper Middleware Pipeline (Opt-in)
+		// WithMiddleware(customLoggingOrTelemetryMiddleware).
 
 		// Optional Proxy
 		// WithProxy("http://proxy.example.com:8080").

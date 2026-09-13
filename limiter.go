@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"math/big"
+	"net/http"
 	"sync"
 	"time"
 )
@@ -155,5 +156,77 @@ func (m *MultiLimiter) Wait(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// WaitRequest executes WaitRequest or Wait on each registered limiter.
+func (m *MultiLimiter) WaitRequest(req *http.Request) error {
+	for _, l := range m.limiters {
+		if rl, ok := l.(RequestLimiter); ok {
+			if err := rl.WaitRequest(req); err != nil {
+				return err
+			}
+		} else {
+			if err := l.Wait(req.Context()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// RequestLimiter defines a rate limiter that can throttle based on the specific *http.Request
+// (such as by host, scheme, or path).
+type RequestLimiter interface {
+	Limiter
+	WaitRequest(req *http.Request) error
+}
+
+// HostRateLimiter manages separate TokenBucket rate limiters on a per-host basis.
+type HostRateLimiter struct {
+	mu             sync.RWMutex
+	buckets        map[string]*TokenBucket
+	requestsPerSec float64
+	burst          int
+}
+
+// NewHostRateLimiter creates a rate limiter that applies the given rate and burst per destination host.
+func NewHostRateLimiter(requestsPerSec float64, burst int) *HostRateLimiter {
+	return &HostRateLimiter{
+		buckets:        make(map[string]*TokenBucket),
+		requestsPerSec: requestsPerSec,
+		burst:          burst,
+	}
+}
+
+// WaitRequest applies rate limiting specifically for the host in the given request.
+func (hl *HostRateLimiter) WaitRequest(req *http.Request) error {
+	if req == nil || req.URL == nil {
+		return nil
+	}
+	host := req.URL.Hostname()
+	if host == "" {
+		host = req.Host
+	}
+
+	hl.mu.RLock()
+	tb, ok := hl.buckets[host]
+	hl.mu.RUnlock()
+
+	if !ok {
+		hl.mu.Lock()
+		tb, ok = hl.buckets[host]
+		if !ok {
+			tb = NewTokenBucket(hl.requestsPerSec, hl.burst)
+			hl.buckets[host] = tb
+		}
+		hl.mu.Unlock()
+	}
+
+	return tb.Wait(req.Context())
+}
+
+// Wait satisfies the Limiter interface for a global context.
+func (hl *HostRateLimiter) Wait(ctx context.Context) error {
 	return nil
 }
