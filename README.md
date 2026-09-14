@@ -1,5 +1,10 @@
 # brisk
 
+[![Test](https://github.com/chickenzord/go-brisk/actions/workflows/test.yml/badge.svg)](https://github.com/chickenzord/go-brisk/actions/workflows/test.yml)
+[![Lint](https://github.com/chickenzord/go-brisk/actions/workflows/lint.yml/badge.svg)](https://github.com/chickenzord/go-brisk/actions/workflows/lint.yml)
+[![Codecov](https://codecov.io/gh/chickenzord/go-brisk/branch/main/graph/badge.svg)](https://codecov.io/gh/chickenzord/go-brisk)
+[![Go Reference](https://pkg.go.dev/badge/github.com/chickenzord/go-brisk.svg)](https://pkg.go.dev/github.com/chickenzord/go-brisk)
+
 A polite and configurable Go HTTP client designed for reliability and well-behaved network requests. Built on standard library primitives, `brisk` pairs browser TLS profiles via [uTLS](https://github.com/refraction-networking/utls) with built-in rate limiting, respectful retries, and request deduplication.
 
 `brisk` returns a standard `*http.Client`, integrating smoothly with any existing Go code or library that accepts `*http.Client` or `http.RoundTripper`.
