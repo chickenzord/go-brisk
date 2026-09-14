@@ -17,10 +17,10 @@ type Limiter interface {
 // TokenBucket implements a standard token bucket rate limiter without external dependencies.
 type TokenBucket struct {
 	mu         sync.Mutex
-	rate       float64       // Tokens added per second
-	burst      float64       // Max tokens in the bucket
-	tokens     float64       // Current token count
-	lastUpdate time.Time     // Last time tokens were replenished
+	rate       float64   // Tokens added per second
+	burst      float64   // Max tokens in the bucket
+	tokens     float64   // Current token count
+	lastUpdate time.Time // Last time tokens were replenished
 }
 
 // NewTokenBucket creates a new TokenBucket rate limiter.

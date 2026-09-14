@@ -243,9 +243,9 @@ func DefaultRetryCondition(resp *http.Response, err error) bool {
 	case http.StatusTooManyRequests: // 429
 		return true
 	case http.StatusInternalServerError, // 500
-		http.StatusBadGateway,          // 502
-		http.StatusServiceUnavailable,  // 503
-		http.StatusGatewayTimeout:       // 504
+		http.StatusBadGateway,         // 502
+		http.StatusServiceUnavailable, // 503
+		http.StatusGatewayTimeout:     // 504
 		return true
 	default:
 		return false
@@ -266,14 +266,6 @@ func IdempotentRetryCondition(resp *http.Response, err error) bool {
 		}
 	}
 	return true
-}
-
-func isNetTimeoutOrTemporary(err error) bool {
-	var netErr net.Error
-	if errorsAs(err, &netErr) {
-		return netErr.Timeout()
-	}
-	return false
 }
 
 func errorsAs(err error, target any) bool {

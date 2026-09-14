@@ -188,7 +188,7 @@ func TestTransportHTTPRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -233,7 +233,7 @@ func TestTransportHTTPSRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -262,13 +262,12 @@ func TestLiveHTTPS(t *testing.T) {
 	if err != nil {
 		t.Skipf("network unavailable or error: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200 OK, got %d", resp.StatusCode)
 	}
 }
-
 
 func TestRetryMiddleware(t *testing.T) {
 	attempts := 0
@@ -301,7 +300,7 @@ func TestRetryMiddleware(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "success" {
@@ -345,7 +344,7 @@ func TestSingleflightMiddleware(t *testing.T) {
 				t.Errorf("request %d failed: %v", idx, reqErr)
 				return
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			b, _ := io.ReadAll(resp.Body)
 			results[idx] = string(b)
 		}(i)
@@ -475,7 +474,7 @@ func TestNestedRetryBuilder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.Get failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "nested builder ok" {
@@ -1396,7 +1395,3 @@ func TestTransportRateLimiterExecution(t *testing.T) {
 		t.Error("expected error due to canceled context in rate limit, got nil")
 	}
 }
-
-
-
-

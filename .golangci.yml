@@ -1,0 +1,34 @@
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - gofmt
+    - goimports
+    - unconvert
+    - unparam
+
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment # micro-optimization; preserves human readability of structs
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # golang.org/x/net/http2.Transport is necessary when dialing custom uTLS connections with HTTP/2 framing
+    - path: transport\.go
+      linters:
+        - staticcheck
+      text: "SA1019"

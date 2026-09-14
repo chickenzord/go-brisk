@@ -110,11 +110,10 @@ func NewTransport(cfg Config) (*Transport, error) {
 		}
 
 		h2Tr.DialTLSContext = func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-			host, port, splitErr := net.SplitHostPort(addr)
+			host, _, splitErr := net.SplitHostPort(addr)
 			if splitErr != nil {
 				host = addr
-				port = "443"
-				addr = net.JoinHostPort(host, port)
+				addr = net.JoinHostPort(host, "443")
 			}
 
 			rawConn, err := dialDestination(ctx, dialContext, cfg.Proxy, addr)
@@ -196,9 +195,9 @@ func dialDestination(ctx context.Context, dialContext func(context.Context, stri
 	}
 	connectReq += "\r\n"
 
-	if _, err := proxyConn.Write([]byte(connectReq)); err != nil {
+	if _, writeErr := proxyConn.Write([]byte(connectReq)); writeErr != nil {
 		_ = proxyConn.Close()
-		return nil, fmt.Errorf("brisk: sending CONNECT to proxy failed: %w", err)
+		return nil, fmt.Errorf("brisk: sending CONNECT to proxy failed: %w", writeErr)
 	}
 
 	br := bufio.NewReader(proxyConn)
