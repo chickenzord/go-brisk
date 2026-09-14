@@ -33,16 +33,35 @@ type Transport struct {
 
 // Config specifies the low-level settings to instantiate a Transport.
 type Config struct {
-	TLSProfile         TLSProfile
-	TLSProfileFunc     TLSProfileSelector
+	// TLSProfile sets a static TLS fingerprint profile.
+	TLSProfile TLSProfile
+
+	// TLSProfileFunc dynamically selects a TLS fingerprint profile per request.
+	TLSProfileFunc TLSProfileSelector
+
+	// InsecureSkipVerify controls whether to skip TLS certificate validation.
 	InsecureSkipVerify bool
-	RootCAs            *x509.CertPool
-	DialTimeout        time.Duration
-	DialContext        func(ctx context.Context, network, addr string) (net.Conn, error)
-	PoolConfig         PoolConfig
-	Proxy              func(*http.Request) (*url.URL, error)
-	Limiter            Limiter
-	DisableHTTP2       bool
+
+	// RootCAs sets custom root certificates for TLS verification.
+	RootCAs *x509.CertPool
+
+	// DialTimeout is the maximum duration to wait for establishing a network connection.
+	DialTimeout time.Duration
+
+	// DialContext customizes network dialing. If nil, net.Dialer is used.
+	DialContext func(ctx context.Context, network, addr string) (net.Conn, error)
+
+	// PoolConfig defines connection pool limits and timeouts.
+	PoolConfig PoolConfig
+
+	// Proxy specifies the proxy selector function. Defaults to http.ProxyFromEnvironment.
+	Proxy func(*http.Request) (*url.URL, error)
+
+	// Limiter applies rate limiting or delays before executing requests.
+	Limiter Limiter
+
+	// DisableHTTP2 forces HTTP/1.1 and disables HTTP/2 framing.
+	DisableHTTP2 bool
 }
 
 // NewTransport constructs a new brisk.Transport with the provided configuration.

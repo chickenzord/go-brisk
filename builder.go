@@ -1,3 +1,5 @@
+// Package brisk provides a configurable Go HTTP client built on standard library primitives,
+// featuring browser TLS fingerprinting via uTLS, respectful retries, rate limiting, and request deduplication.
 package brisk
 
 import (

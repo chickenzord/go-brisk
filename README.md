@@ -1,23 +1,20 @@
 # brisk
 
-Fast, stealthy, and lightweight Go HTTP transport with browser TLS fingerprinting (uTLS), HTTP/2 multiplexing, per-host connection pooling, and zero-dependency rate limiting.
+A polite and configurable Go HTTP client designed for reliability and well-behaved network requests. Built on standard library primitives, `brisk` pairs browser TLS profiles via [uTLS](https://github.com/refraction-networking/utls) with built-in rate limiting, respectful retries, and request deduplication.
 
-Designed as a drop-in replacement for Go's standard library `*http.Client`.
+`brisk` returns a standard `*http.Client`, integrating smoothly with any existing Go code or library that accepts `*http.Client` or `http.RoundTripper`.
 
 ---
 
-## 🚀 Features
+## ✨ Features
 
-- **Standard `*http.Client` Drop-In**: Seamlessly works with any Go library or codebase that accepts `*http.Client` or `http.RoundTripper`.
-- **TLS Anti-Fingerprinting (uTLS)**: Mimics real browser ClientHello signatures (default: Chrome 120) with ALPN `h2` to bypass JA3/JA4 TLS bot detection.
-- **HTTP/2 Multiplexing**: Native HTTP/2 framing and stream multiplexing over uTLS connections.
-- **Configurable Connection Pooling**: Per-host keep-alive pooling with customizable idle connection limits, total active connection limits, and timeouts.
-- **Opt-in Header Injection**: Optionally injects realistic browser headers (`User-Agent`, `Sec-CH-UA`, `Accept-Language`, etc.) without overwriting explicit request headers.
-- **Zero-Dependency Rate Limiting**: Built-in token bucket rate limiter and randomized delay jitter using only Go's standard library (`time` and `sync`).
-- **Proxy Support**: Supports HTTP, HTTPS, and SOCKS5 proxies (`WithProxy`) with automatic fallback to environment variables (`http.ProxyFromEnvironment`).
-- **Minimal Dependencies & Broad Compatibility**:
-  - Only requires `github.com/refraction-networking/utls` and `golang.org/x/net/http2`.
-  - Target minimum Go version: `1.21` (no generics).
+- **Standard `*http.Client` Drop-In**: Seamlessly compatible with standard library interfaces and third-party packages.
+- **Browser TLS Profiles**: Employs uTLS to send consistent browser ClientHello signatures (default: Chrome 120) with ALPN `h2`.
+- **HTTP/2 & HTTP/1.1**: Full connection multiplexing and protocol support over uTLS.
+- **Polite Rate Limiting**: Built-in token bucket (global or per-host) and randomized delay jitter to prevent overwhelming target services.
+- **Respectful Retries**: Exponential backoff with jitter and automated `Retry-After` header handling.
+- **In-Flight Deduplication**: Singleflight request collapsing to avoid redundant concurrent requests.
+- **Connection Management**: Configurable per-host connection pooling, idle timeouts, and rotating proxy support.
 
 ---
 
@@ -27,11 +24,13 @@ Designed as a drop-in replacement for Go's standard library `*http.Client`.
 go get github.com/chickenzord/go-brisk
 ```
 
+Requires Go 1.21+.
+
 ---
 
-## 💻 Quick Start
+## 🚀 Usage
 
-### Basic Usage with Defaults
+### Basic
 
 ```go
 package main
@@ -45,7 +44,6 @@ import (
 )
 
 func main() {
-	// Creates a standard *http.Client with Chrome TLS fingerprinting
 	client, err := brisk.New()
 	if err != nil {
 		log.Fatal(err)
@@ -58,13 +56,13 @@ func main() {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	fmt.Printf("Status: %s, Protocol: %s, Length: %d\n", resp.Status, resp.Proto, len(body))
+	fmt.Printf("%s\n", body)
 }
 ```
 
----
+### Configured Client
 
-## 🛠️ Advanced Configuration (Builder Pattern)
+A practical example showing the essential options most applications configure:
 
 ```go
 package main
@@ -77,55 +75,39 @@ import (
 
 func main() {
 	client, err := brisk.NewBuilder().
-		// Connection Pooling
-		WithMaxIdleConns(100).
-		WithMaxIdleConnsPerHost(50).
-		WithIdleConnTimeout(90 * time.Second).
-
-		// TLS Fingerprint Profile (or WithRandomTLSProfile())
-		WithTLSProfile(brisk.TLSProfileChrome120).
-
-		// Timeouts
+		// Timeouts & Connection Pooling
 		WithTimeout(30 * time.Second).
 		WithDialTimeout(10 * time.Second).
+		WithMaxIdleConnsPerHost(20).
 
-		// Optional Request Headers (e.g. brisk.DesktopChromeHeaders, brisk.MobileChromeHeaders)
+		// TLS Fingerprint & Default Browser Headers
+		WithTLSProfile(brisk.TLSProfileChrome120). // Or WithRandomTLSProfile()
 		WithHeadersFunc(brisk.DesktopChromeHeaders).
 
-		// Zero-Dependency Rate Limiting
-		WithRateLimit(2.0, 5).                             // Global: 2 req/s with burst of 5
-		// WithHostRateLimit(2.0, 5).                      // Or per-host rate limit
-		WithRequestDelay(250*time.Millisecond, 1*time.Second). // Random jitter
+		// Rate Limiting & Delays (Polite Scraping)
+		WithRateLimit(5.0, 10).                                // 5 req/s, burst 10
+		WithRequestDelay(200*time.Millisecond, 1*time.Second). // Random jitter
 
-		// Resilient Scraping: Automatic Backoff & Retry (Opt-in)
+		// Retries with Exponential Backoff
 		WithRetryBuilder(func(r *brisk.RetryBuilder) {
 			r.MaxRetries(3).
-				WhenStatus(429, 502, 503, 504). // Or r.WhenCloudflare() / r.WhenIdempotent()
+				WhenStatus(429, 502, 503, 504).
 				InitialBackoff(500 * time.Millisecond).
-				MaxBackoff(10 * time.Second).
-				Jitter(true).
-				RespectRetryAfter(true)
+				RespectRetryAfter(true) // Honors origin Retry-After headers
 		}).
 
-		// Request Deduplication / Singleflight (Opt-in)
-		// WithSingleflight() // Default GET/HEAD deduplication
-		WithSingleflightBuilder(func(s *brisk.SingleflightBuilder) {
-			// Optional custom key generator: s.KeyFunc(customFunc)
-		}).
+		// Request Deduplication
+		WithSingleflight(). // Collapses duplicate concurrent GET/HEAD requests
 
-		// Custom RoundTripper Middleware Pipeline (Opt-in)
-		// WithMiddleware(customLoggingOrTelemetryMiddleware).
-
-		// Optional Proxy
+		// Optional Proxy or Proxy Pool
 		// WithProxy("http://proxy.example.com:8080").
+		// WithProxyPool([]string{"http://proxy1:8080", "http://proxy2:8080"}).
 
 		Build()
-
 	if err != nil {
 		panic(err)
 	}
 
-	// Use client like any standard *http.Client
 	_ = client
 }
 ```
